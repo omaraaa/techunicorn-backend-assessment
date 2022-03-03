@@ -1,0 +1,9 @@
+{
+
+"registerations": [{
+    "name": "Test",
+    "email": "test@test.com",
+    "password": "password",
+    "account_type": "Doctor"
+}]
+}

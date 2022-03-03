@@ -8,7 +8,8 @@ mod db;
 
 #[rocket::main]
 async fn main() -> Result<(), rocket::error::Error> {
-    db::init_db().unwrap();
+    let db = db::DB::default().unwrap();
+    db.init_schema().unwrap();
 
     rocket::build()
         .mount("/", routes![api::register, api::doctors])
