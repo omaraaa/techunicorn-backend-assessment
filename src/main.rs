@@ -1,5 +1,7 @@
 #[macro_use]
 extern crate rocket;
+extern crate argon2;
+extern crate derive_more;
 
 mod api;
 mod db;
