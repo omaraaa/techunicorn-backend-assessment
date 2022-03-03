@@ -3,36 +3,21 @@ use rocket::serde::{json::Json, Deserialize, Serialize};
 use crate::db;
 
 #[derive(Serialize, Deserialize)]
-pub enum AccountType {
-    Patient,
-    Doctor,
-    Admin,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Doctor {
-    id: i64,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct RegisterForm {
-    name: String,
-    account_type: AccountType,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct LoginForm {
-    name: String,
-    account_type: AccountType,
-}
+pub struct Doctor {}
 
 #[post("/register", data = "<form>")]
-pub fn register(form: Json<RegisterForm>) -> Result<(), ()> {
-    todo!()
+pub fn register(form: Json<RegisterData>) -> Result<(), ()> {
+    db::registerAccount(form).unwrap();
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct LoginData {
+    name: String,
+    account_type: AccountType,
 }
 
 #[post("/login", data = "<form>")]
-pub fn login(form: Json<LoginForm>) -> Result<(), ()> {
+pub fn login(form: Json<LoginData>) -> Result<(), ()> {
     todo!()
 }
 
