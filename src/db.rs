@@ -45,33 +45,40 @@ pub struct RegisterData {
 
 use argon2::{self, Config};
 
-pub fn registerAccount(data: RegisterData) -> Result<(), Error> {
+pub fn register_account(data: RegisterData) -> Result<(), Error> {
     let conn = Connection::open("./database.db3")?;
 
     let salt = b"should be random";
     let config = Config::default();
     let passhash = argon2::hash_encoded(data.password.as_bytes(), salt, &config)?;
 
-    let mut stmnt = conn.prepare(
-        "INSERT INTO account (fullname, email, passhash) VALUES (?1, ?2, ?3) RETURNING id",
-    )?;
+    let id = {
+        let mut stmnt = conn.prepare(
+            "INSERT INTO account (fullname, email, passhash) VALUES (?1, ?2, ?3) RETURNING id",
+        )?;
 
-    let mut itr = stmnt.query_map(params![data.name, data.email, passhash], |r| {
-        r.get::<_, i32>(0)
-    })?;
-    let id = itr.next().unwrap()?;
+        let mut itr = stmnt.query_map(params![data.name, data.email, passhash], |r| {
+            r.get::<_, i32>(0)
+        })?;
+        itr.next().unwrap()?
+    };
 
-    match data.account_type {
-        Doctor => {
-            registerDoctor(id)?;
-        }
-    }
+    register_account_type(conn, data.account_type, id)?;
 
     Ok(())
 }
 
-fn registerDoctor(id: i32) -> Result<(), Error> {
-    let conn = Connection::open("./database.db3")?;
-    conn.execute("INSERT INTO doctor(id) values (?1)", params![id])?;
+fn register_account_type(
+    conn: Connection,
+    account_type: AccountType,
+    id: i32,
+) -> Result<(), Error> {
+    let sql = match account_type {
+        AccountType::Doctor => "INSERT INTO doctor(id) values (?1)",
+        AccountType::Patient => "INSERT INTO patient(id) values (?1)",
+        AccountType::Admin => "INSERT INTO admin(id) values (?1)",
+    };
+
+    conn.execute(sql, params![id])?;
     Ok(())
 }
