@@ -7,11 +7,21 @@ use std::result::Result;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use argon2::{self, Config};
+
+use num_enum::{IntoPrimitive, TryFromPrimitive};
+
 #[derive(Debug, From)]
 pub enum Error {
     DBError(rusqlite::Error),
     HashingError(argon2::Error),
     JWTError(jsonwebtoken::errors::Error),
+}
+
+pub fn password_hash(password: String) -> Result<String, Error> {
+    let salt = b"should be random";
+    let config = Config::default();
+    Ok(argon2::hash_encoded(password.as_bytes(), salt, &config)?)
 }
 
 #[derive(Debug)]
@@ -97,7 +107,7 @@ impl DB {
             |row| -> Result<Claims, rusqlite::Error> {
                 Ok(Claims {
                     sub: row.get(0)?,
-                    account_type: row.get(1)?,
+                    account_type: AccountType::try_from(row.get::<_, i32>(1)?).unwrap(),
                     iat: SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap()
@@ -116,7 +126,20 @@ impl DB {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+pub fn decode_JWT(jwt: &str) -> Result<Claims, Error> {
+    let token = decode::<Claims>(
+        jwt,
+        &DecodingKey::from_secret("secret".as_ref()),
+        &Validation::new(Algorithm::HS256),
+    )?;
+
+    Ok(token.claims)
+}
+
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, IntoPrimitive, TryFromPrimitive, PartialEq, Eq,
+)]
+#[repr(i32)]
 pub enum AccountType {
     Patient = 0,
     Doctor = 1,
@@ -131,14 +154,6 @@ pub struct RegisterData {
     account_type: AccountType,
 }
 
-use argon2::{self, Config};
-
-pub fn password_hash(password: String) -> Result<String, Error> {
-    let salt = b"should be random";
-    let config = Config::default();
-    Ok(argon2::hash_encoded(password.as_bytes(), salt, &config)?)
-}
-
 #[derive(Serialize, Deserialize)]
 pub struct LoginData {
     email: String,
@@ -146,10 +161,23 @@ pub struct LoginData {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Claims {
-    sub: String,
-    account_type: i32,
-    iat: u64,
+pub struct Claims {
+    pub sub: String,
+    pub account_type: AccountType,
+    pub iat: u64,
+}
+
+impl Claims {
+    pub fn is_valid<T>(&self) -> bool
+    where
+        T: AccountTypeCheck,
+    {
+        T::is_valid(self.account_type)
+    }
+}
+
+pub trait AccountTypeCheck {
+    fn is_valid(at: AccountType) -> bool;
 }
 
 #[cfg(test)]
