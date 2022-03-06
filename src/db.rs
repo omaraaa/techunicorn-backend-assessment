@@ -94,8 +94,7 @@ impl DB {
 
     pub fn login(&self, data: LoginData) -> Result<String, Error> {
         let hash = password_hash(data.password)?;
-        let conn = Connection::open("./database.db3")?;
-        let mut stmt = conn.prepare(
+        let mut stmt = self.con.prepare(
             "SELECT email, account_type 
         FROM account 
         WHERE account.email=?1 AND account.passhash=?2
@@ -124,9 +123,21 @@ impl DB {
 
         Ok(token)
     }
+
+    pub fn get_doctor_info(&self, doctor_id: i32) -> Result<DoctorInfo, Error> {
+        let mut stmnt = self.con.prepare("SELECT fullname, specialty, details FROM account LEFT JOIN doctor ON account.id = doctor.id WHERE account.id = ?1")?;
+        let info = stmnt.query_row(params![doctor_id], |row| {
+            Ok(DoctorInfo {
+                name: row.get(0)?,
+                specialty: row.get(1)?,
+                details: row.get(2)?,
+            })
+        })?;
+        Ok(info)
+    }
 }
 
-pub fn decode_JWT(jwt: &str) -> Result<Claims, Error> {
+pub fn decode_jwt(jwt: &str) -> Result<Claims, Error> {
     let token = decode::<Claims>(
         jwt,
         &DecodingKey::from_secret("secret".as_ref()),
@@ -172,12 +183,26 @@ impl Claims {
     where
         T: AccountTypeCheck,
     {
-        T::is_valid(self.account_type)
+        T::is_valid(self)
     }
 }
 
 pub trait AccountTypeCheck {
-    fn is_valid(at: AccountType) -> bool;
+    fn is_valid(claims: &Claims) -> bool;
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DoctorInfo {
+    name: String,
+    specialty: String,
+    details: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum AppointmentStatus {
+    Booked,
+    Cancelled,
+    Done,
 }
 
 #[cfg(test)]

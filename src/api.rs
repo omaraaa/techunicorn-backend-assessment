@@ -27,24 +27,37 @@ pub fn doctors(_auth: AccountGuard<ADMIN>) -> Json<Vec<i32>> {
     Json::from(db.doctors().unwrap())
 }
 
+#[get("/doctors/<doctor_id>")]
+pub fn doctor_info(doctor_id: i32) -> Json<db::DoctorInfo> {
+    let db = DB::default().unwrap();
+    Json::from(db.get_doctor_info(doctor_id).unwrap())
+}
+
 pub struct ADMIN {}
 impl db::AccountTypeCheck for ADMIN {
-    fn is_valid(at: db::AccountType) -> bool {
-        at == db::AccountType::Admin
+    fn is_valid(claims: &db::Claims) -> bool {
+        claims.account_type == db::AccountType::Admin
     }
 }
 
 pub struct DOCTOR {}
 impl db::AccountTypeCheck for DOCTOR {
-    fn is_valid(at: db::AccountType) -> bool {
-        at == db::AccountType::Doctor
+    fn is_valid(claims: &db::Claims) -> bool {
+        claims.account_type == db::AccountType::Doctor
     }
 }
 
 pub struct PATIENT {}
 impl db::AccountTypeCheck for PATIENT {
-    fn is_valid(at: db::AccountType) -> bool {
-        at == db::AccountType::Patient
+    fn is_valid(claims: &db::Claims) -> bool {
+        claims.account_type == db::AccountType::Patient
+    }
+}
+
+pub struct ALL {}
+impl db::AccountTypeCheck for ALL {
+    fn is_valid(claims: &db::Claims) -> bool {
+        true
     }
 }
 
@@ -74,7 +87,7 @@ where
             None => Outcome::Failure((Status::Unauthorized, AuthError::Missing)),
             Some(auth) => {
                 let jwt = auth.split(" ").last().unwrap();
-                let claims = db::decode_JWT(jwt).unwrap();
+                let claims = db::decode_jwt(jwt).unwrap();
 
                 if !claims.is_valid::<T>() {
                     Outcome::Failure((Status::Unauthorized, AuthError::Invalid))

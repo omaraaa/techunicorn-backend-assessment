@@ -12,7 +12,10 @@ async fn main() -> Result<(), rocket::error::Error> {
     db.init_schema().unwrap();
 
     rocket::build()
-        .mount("/", routes![api::register, api::login, api::doctors])
+        .mount(
+            "/",
+            routes![api::register, api::login, api::doctors, api::doctor_info],
+        )
         .launch()
         .await
 }
