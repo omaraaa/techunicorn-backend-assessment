@@ -3,12 +3,14 @@ use std::marker::PhantomData;
 use crate::db::{self, Claims, DB};
 use chrono::{DateTime, Duration, FixedOffset};
 use derive_more::From;
-use rocket::catcher::Result;
 use rocket::http::{Accept, Status};
 use rocket::request::{self, FromRequest, Outcome, Request};
+use rocket::response::status::BadRequest;
 use rocket::serde::json::Json;
 use rocket::State;
 use serde::{Deserialize, Serialize};
+
+use std::result::Result;
 
 #[post("/register", format = "json", data = "<data>")]
 pub fn register(data: Json<db::RegisterData>) {
@@ -71,6 +73,38 @@ pub fn doctor_booked_slots(
             })
             .collect::<Vec<BookedTimeslotsView>>(),
     )
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BookInput {
+    start_date: DateTime<FixedOffset>,
+    duration: i32,
+}
+
+#[post("/doctors/<doctor_id>/book", format = "json", data = "<input>")]
+pub fn book_doctor(
+    doctor_id: i32,
+    input: Json<BookInput>,
+    auth: AccountGuard<PATIENT>,
+) -> Result<Json<i32>, BadRequest<String>> {
+    let db = DB::default().unwrap();
+    let doctor_available = db
+        .is_valid_appointment_request(doctor_id, &input.start_date, input.duration)
+        .unwrap();
+
+    if doctor_available {
+        let appointment_id = db
+            .book_appointment(db::AppointmentRequest {
+                doctor_id: doctor_id,
+                patient_id: auth.claims.sub,
+                start_date: input.start_date,
+                duration: input.duration,
+            })
+            .unwrap();
+        Ok(Json::from(appointment_id))
+    } else {
+        Err(BadRequest(Some("doctor unavailable".to_string())))
+    }
 }
 
 pub struct ADMIN {}

@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, FixedOffset, NaiveDate};
+use chrono::{Date, DateTime, Duration, FixedOffset, NaiveDate};
 use rusqlite::{params, Connection, Row};
 
 use derive_more::From;
@@ -100,7 +100,7 @@ impl DB {
 
     pub fn login(&self, data: LoginData) -> Result<JWT, Error> {
         let mut stmt = self.con.prepare(
-            "SELECT email, account_type, passhash 
+            "SELECT id, account_type, passhash 
         FROM account 
         WHERE account.email=?1
         ",
@@ -173,6 +173,66 @@ impl DB {
 
         Ok(q.collect::<Result<_, _>>()?)
     }
+
+    pub fn book_appointment(&self, request: AppointmentRequest) -> Result<i32, Error> {
+        let mut stmnt = self.con.prepare(
+            "INSERT INTO appointment(doctor_id, patient_id, appointment_status, start_date, duration)
+             VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id"
+        ).unwrap();
+
+        let q: i32 = stmnt.query_row(
+            params![
+                request.doctor_id,
+                request.patient_id,
+                AppointmentStatus::Booked as i32,
+                request.start_date.timestamp() as i32,
+                request.duration
+            ],
+            |row| row.get(0),
+        )?;
+
+        Ok(q)
+    }
+
+    pub fn is_valid_appointment_request(
+        &self,
+        doctor_id: i32,
+        start_date: &DateTime<FixedOffset>,
+        duration: i32,
+    ) -> Result<bool, Error> {
+        if duration < 15 || duration > 120 {
+            return Ok(false);
+        }
+
+        let stats = self.get_doctor_stats(doctor_id, start_date.date())?;
+        if stats.appointments_count >= 12 || stats.booked_mins > 8 * 60 {
+            return Ok(false);
+        }
+
+        return Ok(true);
+    }
+
+    pub fn get_doctor_stats(
+        &self,
+        doctor_id: i32,
+        day: Date<FixedOffset>,
+    ) -> Result<DoctorAppointmentStats, Error> {
+        let mut stmnt = self.con.prepare(
+            "SELECT count(*), sum(duration) From appointments WHERE doctor_id = ?1 and date(starting_date) = ?2",
+        )?;
+
+        let q = stmnt.query_row(
+            params![doctor_id, day.format("%Y-%m-%d").to_string()],
+            |row| {
+                Ok(DoctorAppointmentStats {
+                    appointments_count: row.get(0)?,
+                    booked_mins: row.get(1)?,
+                })
+            },
+        )?;
+
+        Ok(q)
+    }
 }
 
 pub fn decode_jwt(jwt: &str) -> Result<Claims, Error> {
@@ -213,7 +273,7 @@ pub type JWT = String;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
-    pub sub: String,
+    pub sub: i32,
     pub account_type: AccountType,
     pub iat: u64,
 }
@@ -248,6 +308,14 @@ pub struct Appointment {
     pub status: AppointmentStatus,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AppointmentRequest {
+    pub doctor_id: i32,
+    pub patient_id: i32,
+    pub start_date: DateTime<FixedOffset>,
+    pub duration: i32,
+}
+
 #[derive(
     Debug, Serialize, Deserialize, Clone, Copy, IntoPrimitive, TryFromPrimitive, PartialEq, Eq,
 )]
@@ -256,6 +324,12 @@ pub enum AppointmentStatus {
     Booked,
     Cancelled,
     Done,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DoctorAppointmentStats {
+    appointments_count: i32,
+    booked_mins: i32,
 }
 
 #[cfg(test)]

@@ -19,7 +19,8 @@ async fn main() -> Result<(), rocket::error::Error> {
                 api::login,
                 api::doctors,
                 api::doctor_info,
-                api::doctor_booked_slots
+                api::doctor_booked_slots,
+                api::book_appointment
             ],
         )
         .launch()
