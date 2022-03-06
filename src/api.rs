@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 
 use crate::db::{self, Claims, DB};
+use chrono::{DateTime, Duration, FixedOffset};
 use derive_more::From;
 use rocket::catcher::Result;
 use rocket::http::{Accept, Status};
@@ -12,7 +13,7 @@ use serde::{Deserialize, Serialize};
 #[post("/register", format = "json", data = "<data>")]
 pub fn register(data: Json<db::RegisterData>) {
     let db = DB::default().unwrap();
-    db.register_account(data.0).unwrap();
+    db.register(data.0).unwrap();
 }
 
 #[post("/login", format = "json", data = "<data>")]
@@ -33,29 +34,68 @@ pub fn doctor_info(doctor_id: i32) -> Json<db::DoctorInfo> {
     Json::from(db.get_doctor_info(doctor_id).unwrap())
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BookedTimeslotsView {
+    doctor_id: i32,
+    patient_id: Option<i32>,
+    start_date: DateTime<FixedOffset>,
+    duration: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BookedSlotsInput {
+    day: String,
+}
+
+#[get("/doctors/<doctor_id>/slots", format = "json", data = "<input>")]
+pub fn doctor_booked_slots(
+    doctor_id: i32,
+    input: Json<BookedSlotsInput>,
+    auth: AccountGuard<ALL>,
+) -> Json<Vec<BookedTimeslotsView>> {
+    let db = DB::default().unwrap();
+    let day = chrono::DateTime::parse_from_str(&input.day, "%Y-%m-%d").unwrap();
+    let appointments = db.get_doctor_appointments(doctor_id, day).unwrap();
+
+    Json::from(
+        appointments
+            .into_iter()
+            .map(|a| BookedTimeslotsView {
+                doctor_id: a.doctor_id,
+                patient_id: match auth.claims.account_type {
+                    db::AccountType::Patient => None,
+                    _ => Some(a.patient_id),
+                },
+                start_date: a.start_date,
+                duration: a.duration,
+            })
+            .collect::<Vec<BookedTimeslotsView>>(),
+    )
+}
+
 pub struct ADMIN {}
-impl db::AccountTypeCheck for ADMIN {
+impl db::ValidClaimsChecker for ADMIN {
     fn is_valid(claims: &db::Claims) -> bool {
         claims.account_type == db::AccountType::Admin
     }
 }
 
 pub struct DOCTOR {}
-impl db::AccountTypeCheck for DOCTOR {
+impl db::ValidClaimsChecker for DOCTOR {
     fn is_valid(claims: &db::Claims) -> bool {
         claims.account_type == db::AccountType::Doctor
     }
 }
 
 pub struct PATIENT {}
-impl db::AccountTypeCheck for PATIENT {
+impl db::ValidClaimsChecker for PATIENT {
     fn is_valid(claims: &db::Claims) -> bool {
         claims.account_type == db::AccountType::Patient
     }
 }
 
 pub struct ALL {}
-impl db::AccountTypeCheck for ALL {
+impl db::ValidClaimsChecker for ALL {
     fn is_valid(claims: &db::Claims) -> bool {
         true
     }
@@ -63,7 +103,7 @@ impl db::AccountTypeCheck for ALL {
 
 pub struct AccountGuard<T>
 where
-    T: db::AccountTypeCheck,
+    T: db::ValidClaimsChecker,
 {
     phantom: PhantomData<T>,
     claims: Claims,
@@ -78,7 +118,7 @@ pub enum AuthError {
 #[rocket::async_trait]
 impl<'r, T> FromRequest<'r> for AccountGuard<T>
 where
-    T: db::AccountTypeCheck,
+    T: db::ValidClaimsChecker,
 {
     type Error = AuthError;
 

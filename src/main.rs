@@ -14,7 +14,13 @@ async fn main() -> Result<(), rocket::error::Error> {
     rocket::build()
         .mount(
             "/",
-            routes![api::register, api::login, api::doctors, api::doctor_info],
+            routes![
+                api::register,
+                api::login,
+                api::doctors,
+                api::doctor_info,
+                api::doctor_booked_slots
+            ],
         )
         .launch()
         .await

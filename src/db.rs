@@ -1,4 +1,5 @@
-use rusqlite::{params, Connection};
+use chrono::{DateTime, Duration, FixedOffset, NaiveDate};
+use rusqlite::{params, Connection, Row};
 
 use derive_more::From;
 use serde::{Deserialize, Serialize};
@@ -16,12 +17,17 @@ pub enum Error {
     DBError(rusqlite::Error),
     HashingError(argon2::Error),
     JWTError(jsonwebtoken::errors::Error),
+    InvalidPassword,
 }
 
-pub fn password_hash(password: String) -> Result<String, Error> {
+pub fn password_hash(password: &[u8]) -> Result<String, Error> {
     let salt = b"should be random";
     let config = Config::default();
-    Ok(argon2::hash_encoded(password.as_bytes(), salt, &config)?)
+    Ok(argon2::hash_encoded(password, salt, &config)?)
+}
+
+pub fn verify_password(hash: &str, password: &[u8]) -> Result<bool, Error> {
+    Ok(argon2::verify_encoded(&hash, password)?)
 }
 
 #[derive(Debug)]
@@ -62,13 +68,13 @@ impl DB {
         Ok(q.collect::<Result<_, _>>()?)
     }
 
-    pub fn register_account(&self, data: RegisterData) -> Result<(), Error> {
+    pub fn register(&self, data: RegisterData) -> Result<(), Error> {
         let id = {
             let mut stmnt = self.con.prepare(
                 "INSERT INTO account (fullname, email, passhash, account_type) VALUES (?1, ?2, ?3, ?4) RETURNING id",
             )?;
 
-            let passhash = password_hash(data.password)?;
+            let passhash = password_hash(data.password.as_bytes())?;
 
             stmnt.query_row(
                 params![data.name, data.email, passhash, data.account_type as i32],
@@ -92,28 +98,32 @@ impl DB {
         Ok(())
     }
 
-    pub fn login(&self, data: LoginData) -> Result<String, Error> {
-        let hash = password_hash(data.password)?;
+    pub fn login(&self, data: LoginData) -> Result<JWT, Error> {
         let mut stmt = self.con.prepare(
-            "SELECT email, account_type 
+            "SELECT email, account_type, passhash 
         FROM account 
-        WHERE account.email=?1 AND account.passhash=?2
+        WHERE account.email=?1
         ",
         )?;
 
-        let claims: Claims = stmt.query_row(
-            params![data.email, hash],
-            |row| -> Result<Claims, rusqlite::Error> {
-                Ok(Claims {
-                    sub: row.get(0)?,
-                    account_type: AccountType::try_from(row.get::<_, i32>(1)?).unwrap(),
-                    iat: SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
-                })
-            },
-        )?;
+        let claims: Claims = stmt.query_row(params![data.email], |row: &Row| {
+            let password_hash: String = row.get(2)?;
+
+            match verify_password(&password_hash, data.password.as_bytes()) {
+                Ok(false) => return Ok(Err(Error::InvalidPassword)),
+                Err(e) => return Ok(Err(e)),
+                Ok(true) => {}
+            }
+
+            Ok(Ok(Claims {
+                sub: row.get(0)?,
+                account_type: AccountType::try_from(row.get::<_, i32>(1)?).unwrap(),
+                iat: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            }))
+        })??;
 
         let token = encode(
             &Header::default(),
@@ -134,6 +144,34 @@ impl DB {
             })
         })?;
         Ok(info)
+    }
+
+    pub fn get_doctor_appointments(
+        &self,
+        doctor_id: i32,
+        day: DateTime<FixedOffset>,
+    ) -> Result<Vec<Appointment>, Error> {
+        let mut stmnt = self
+            .con
+            .prepare("SELECT * FROM appointment WHERE doctor = ?1 and date(starting_date) = ?2")?;
+
+        let mut q = stmnt.query_map(
+            params![doctor_id, day.format("%Y-%m-%d").to_string()],
+            |row| {
+                let appointment = Appointment {
+                    id: row.get(0)?,
+                    doctor_id: row.get(1)?,
+                    patient_id: row.get(2)?,
+                    status: AppointmentStatus::try_from(row.get::<_, i32>(3)?).unwrap(),
+                    start_date: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?).unwrap(),
+                    duration: row.get(5)?,
+                };
+
+                Ok(appointment)
+            },
+        )?;
+
+        Ok(q.collect::<Result<_, _>>()?)
     }
 }
 
@@ -171,6 +209,8 @@ pub struct LoginData {
     password: String,
 }
 
+pub type JWT = String;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
@@ -181,13 +221,13 @@ pub struct Claims {
 impl Claims {
     pub fn is_valid<T>(&self) -> bool
     where
-        T: AccountTypeCheck,
+        T: ValidClaimsChecker,
     {
         T::is_valid(self)
     }
 }
 
-pub trait AccountTypeCheck {
+pub trait ValidClaimsChecker {
     fn is_valid(claims: &Claims) -> bool;
 }
 
@@ -199,6 +239,19 @@ pub struct DoctorInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct Appointment {
+    id: i32,
+    pub doctor_id: i32,
+    pub patient_id: i32,
+    pub start_date: DateTime<FixedOffset>,
+    pub duration: i32,
+    pub status: AppointmentStatus,
+}
+
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, IntoPrimitive, TryFromPrimitive, PartialEq, Eq,
+)]
+#[repr(i32)]
 pub enum AppointmentStatus {
     Booked,
     Cancelled,
@@ -225,7 +278,7 @@ mod tests {
         let mock: MockData = serde_json::from_str(include_str!("./mock.json")).unwrap();
 
         let r = mock.registerations.get(0).unwrap().clone();
-        db.register_account(r.clone()).unwrap();
+        db.register(r.clone()).unwrap();
         let jwt = db
             .login(LoginData {
                 email: r.email.clone(),
