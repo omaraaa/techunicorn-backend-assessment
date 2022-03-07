@@ -25,7 +25,7 @@ pub fn login(data: Json<db::LoginData>) -> String {
 }
 
 #[get("/doctors")]
-pub fn doctors(_auth: AccountGuard<ADMIN>) -> Json<Vec<i32>> {
+pub fn doctors() -> Json<Vec<i32>> {
     let db = DB::default().unwrap();
     Json::from(db.doctors().unwrap())
 }
@@ -38,7 +38,6 @@ pub fn doctor_info(doctor_id: i32) -> Json<db::DoctorInfo> {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BookedTimeslotsView {
-    doctor_id: i32,
     patient_id: Option<i32>,
     start_date: DateTime<FixedOffset>,
     duration: i32,
@@ -58,7 +57,6 @@ pub fn doctor_booked_slots(
         appointments
             .into_iter()
             .map(|a| BookedTimeslotsView {
-                doctor_id: a.doctor_id,
                 patient_id: match auth.claims.account_type {
                     db::AccountType::Patient => None,
                     _ => Some(a.patient_id),
@@ -124,10 +122,7 @@ pub fn cancel_appointment(
 }
 
 #[get("/doctors/available", format = "json", data = "<input>")]
-pub fn available_doctors(
-    input: Json<DateInput>,
-    _auth: AccountGuard<ALL>,
-) -> Json<Vec<db::DoctorAppointmentStats>> {
+pub fn available_doctors(input: Json<DateInput>, _auth: AccountGuard<ADMIN>) -> Json<Vec<i32>> {
     let db = DB::default().unwrap();
     let date = chrono::DateTime::parse_from_str(&input.date, "%Y-%m-%d").unwrap();
     Json::from(
@@ -135,7 +130,8 @@ pub fn available_doctors(
             .unwrap()
             .into_iter()
             .filter(|stats| stats.booked_mins < 8 * 60 && stats.appointments_count < 12)
-            .collect::<Vec<db::DoctorAppointmentStats>>(),
+            .map(|s| s.doctor_id)
+            .collect::<Vec<i32>>(),
     )
 }
 

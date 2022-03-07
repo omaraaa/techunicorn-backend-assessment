@@ -91,12 +91,14 @@ impl DB<'_> {
             GROUP BY account.id
             HAVING account_type=?1 
             AND date(starting_date) = ?2
+            AND appointment_status != ?3
             ",
         )?;
         let q = stmt.query_map(
             params![
                 AccountType::Doctor as i32,
-                day.format("%Y-%m-%d").to_string()
+                day.format("%Y-%m-%d").to_string(),
+                AppointmentStatus::Cancelled as i32
             ],
             |row| {
                 Ok(DoctorAppointmentStats {
@@ -218,10 +220,13 @@ impl DB<'_> {
     }
 
     pub fn book_appointment(&self, request: AppointmentRequest) -> Result<i32, Error> {
-        let mut stmnt = self.con().prepare(
-            "INSERT INTO appointment(doctor_id, patient_id, appointment_status, start_date, duration)
-             VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id"
-        ).unwrap();
+        let mut stmnt = self
+            .con()
+            .prepare(
+                "INSERT INTO appointment(doctor, patient, appointment_status, start_date, duration_mins)
+             VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id",
+            )
+            .unwrap();
 
         let q: i32 = stmnt.query_row(
             params![
@@ -261,11 +266,17 @@ impl DB<'_> {
         day: Date<FixedOffset>,
     ) -> Result<DoctorAppointmentStats, Error> {
         let mut stmnt = self.con().prepare(
-            "SELECT doctor, count(*), sum(duration) From appointments WHERE doctor = ?1 and date(starting_date) = ?2",
+            "SELECT doctor, count(*), sum(duration) FROM appointments
+                 GROUP BY doctor
+                 HAVING doctor = ?1 and date(starting_date) = ?2 and appointment_status != ?3",
         )?;
 
         let q = stmnt.query_row(
-            params![doctor_id, day.format("%Y-%m-%d").to_string()],
+            params![
+                doctor_id,
+                day.format("%Y-%m-%d").to_string(),
+                AppointmentStatus::Cancelled as i32
+            ],
             |row| {
                 Ok(DoctorAppointmentStats {
                     doctor_id: row.get(0)?,
